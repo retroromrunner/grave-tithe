@@ -7,7 +7,7 @@
 <style>
   html,body{margin:0;padding:0;background:#05060a;color:#cfd8c9;font-family:Georgia,'Times New Roman',serif;
     display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:100vh;overflow:hidden;}
-  #wrap{position:relative;width:min(96vw,960px);}
+  #wrap{position:relative;width:min(98vw, calc((100vh - 46px) * 16 / 9));width:min(98vw, calc((100dvh - 46px) * 16 / 9));}
   canvas{display:block;width:100%;height:auto;background:#070a12;border:2px solid #232b3a;border-radius:6px;
     box-shadow:0 0 60px rgba(80,255,170,.07),0 0 120px rgba(0,0,0,.9);touch-action:none;}
   #hint{text-align:center;font-size:13px;color:#7d8a7a;margin-top:8px;letter-spacing:.4px;}
@@ -266,6 +266,10 @@ function update(dt){
   for(i=train.length-1;i>=0;i--){ var sk=train[i]; sk.age+=dt;
     var idx=Math.min(history.length-1,(i+1)*20), tgt=history[idx]||player;
     sk.x+=(tgt.x-sk.x)*Math.min(1,dt*10); sk.y+=(tgt.y-sk.y)*Math.min(1,dt*10);
+    /* stand-off ring: the train never piles onto the keeper — each skeleton holds
+       at least 21px off, so the whole train stays visible around a still player */
+    var pdx=sk.x-player.x,pdy=sk.y-player.y,pd=Math.hypot(pdx,pdy);
+    if(pd<17){ var pa=pd>1?Math.atan2(pdy,pdx):i*2.4; sk.x=player.x+Math.cos(pa)*17; sk.y=player.y+Math.sin(pa)*17; }
     var lim=feralLimit();
     if(!sk.warned&&sk.age>lim-5){ sk.warned=true; sfx('warn'); addText(sk.x,sk.y-46,'IT STIRS…','#ffd97a'); }
     if(sk.age>=lim){
@@ -304,7 +308,7 @@ function update(dt){
   } else {
     warden.chaseT=(warden.chaseT||0)+dt;
     if(warden.chaseT>14){ warden.active=false; warden.timer=4; burst(warden.x,warden.y,20,'#8a93b8',60); addText(warden.x,warden.y-44,'The Warden dissolves… for now.','#b9c2e8'); }
-    var wSpd=Math.min(1.6,0.55+banked*0.04+(1-nightT/NIGHT_LEN)*0.3);
+    var wSpd=Math.min(1.6,0.58+banked*0.03+(1-nightT/NIGHT_LEN)*0.45); // the Warden quickens as dawn nears
     /* target: player, but drifts toward the tail of the train when close */
     var tx=player.x,ty=player.y;
     if(train.length>0){ var tail=train[train.length-1]; if(Math.hypot(tail.x-warden.x,tail.y-warden.y)<Math.hypot(tx-warden.x,ty-warden.y)+40){ tx=tail.x; ty=tail.y; } }
@@ -520,8 +524,8 @@ function draw(){
   /* entities: train, ferals, warden, player */
   var lim=feralLimit(),i,sk;
   for(i=0;i<train.length;i++){ sk=train[i]; var r=Math.min(1,sk.age/lim);
-    var col=r<0.62?'#69f2a0':(r<0.85?'#ffd94d':'#ff5f4d');
-    if(r>=0.85&&Math.floor(timeG*10)%2===0) col='#ffd94d';
+    var col=r<0.65?'#69f2a0':(r<0.8?'#ffd94d':'#69f2a0');
+    if(r>=0.8&&Math.floor(timeG*8)%2===0) col='#ff5f4d'; // about to turn: blinks red (turned = solid red)
     drawSkeletonFig(sk.x,sk.y,col,sk.bob,1); }
   for(i=0;i<ferals.length;i++) drawSkeletonFig(ferals[i].x,ferals[i].y,'#ff5f4d',ferals[i].bob,1.12);
   drawWarden();
