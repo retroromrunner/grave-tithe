@@ -1,0 +1,582 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>GRAVE TITHE — a necromancy tale</title>
+<style>
+  html,body{margin:0;padding:0;background:#05060a;color:#cfd8c9;font-family:Georgia,'Times New Roman',serif;
+    display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:100vh;overflow:hidden;}
+  #wrap{position:relative;width:min(96vw,960px);}
+  canvas{display:block;width:100%;height:auto;background:#070a12;border:2px solid #232b3a;border-radius:6px;
+    box-shadow:0 0 60px rgba(80,255,170,.07),0 0 120px rgba(0,0,0,.9);touch-action:none;}
+  #hint{text-align:center;font-size:13px;color:#7d8a7a;margin-top:8px;letter-spacing:.4px;}
+  #hint b{color:#b9e6c3;}
+</style>
+</head>
+<body>
+<div id="wrap"><canvas id="game" width="960" height="540"></canvas></div>
+<div id="hint"><b>WASD / Arrows</b> move &nbsp;·&nbsp; hold <b>SPACE</b> at a grave to raise the dead &nbsp;·&nbsp; <b>SHIFT</b> dash &nbsp;·&nbsp; <b>P</b> pause &nbsp;·&nbsp; <b>M</b> mute</div>
+<script>
+(function(){
+'use strict';
+var cv=document.getElementById('game'),ctx=cv.getContext('2d');
+var W=960,H=540;
+
+/* ============================== AUDIO ============================== */
+var AC=null,master=null,muted=false,ambientOn=false;
+function audioInit(){
+  if(AC) return;
+  try{
+    AC=new (window.AudioContext||window.webkitAudioContext)();
+    master=AC.createGain(); master.gain.value=0.5; master.connect(AC.destination);
+    startAmbient();
+  }catch(e){ AC=null; }
+}
+function tone(f,dur,type,vol,slideTo,delay){
+  if(!AC||muted) return;
+  var t=AC.currentTime+(delay||0);
+  var o=AC.createOscillator(),g=AC.createGain();
+  o.type=type||'sine'; o.frequency.setValueAtTime(f,t);
+  if(slideTo) o.frequency.exponentialRampToValueAtTime(Math.max(20,slideTo),t+dur);
+  g.gain.setValueAtTime(0.0001,t);
+  g.gain.exponentialRampToValueAtTime(vol||0.2,t+0.015);
+  g.gain.exponentialRampToValueAtTime(0.0001,t+dur);
+  o.connect(g); g.connect(master); o.start(t); o.stop(t+dur+0.05);
+}
+function noiseBurst(dur,vol,freq,delay){
+  if(!AC||muted) return;
+  var t=AC.currentTime+(delay||0);
+  var len=Math.floor(AC.sampleRate*dur),buf=AC.createBuffer(1,len,AC.sampleRate),d=buf.getChannelData(0);
+  for(var i=0;i<len;i++) d[i]=(Math.random()*2-1)*(1-i/len);
+  var src=AC.createBufferSource(); src.buffer=buf;
+  var f=AC.createBiquadFilter(); f.type='bandpass'; f.frequency.value=freq||800; f.Q.value=0.8;
+  var g=AC.createGain(); g.gain.value=vol||0.2;
+  src.connect(f); f.connect(g); g.connect(master); src.start(t);
+}
+function sfx(name){
+  if(!AC||muted) return;
+  switch(name){
+    case 'rattle':
+      for(var i=0;i<5;i++) noiseBurst(0.05,0.16,1800+Math.random()*900,i*0.055);
+      tone(140,0.25,'triangle',0.12,70); break;
+    case 'raise':
+      tone(196,0.4,'sine',0.2,392); tone(294,0.5,'sine',0.14,588,0.08);
+      noiseBurst(0.3,0.08,500); break;
+    case 'bank':
+      [523.25,659.25,783.99,1046.5].forEach(function(f,i){ tone(f,0.7,'sine',0.16,null,i*0.09); tone(f*2,0.4,'sine',0.05,null,i*0.09); });
+      break;
+    case 'bankOne': tone(783.99,0.35,'sine',0.12); tone(1568,0.25,'sine',0.04); break;
+    case 'hurt': tone(220,0.3,'sawtooth',0.22,55); noiseBurst(0.2,0.2,300); break;
+    case 'steal': tone(880,0.5,'sine',0.16,110); break;
+    case 'feral': tone(300,0.45,'sawtooth',0.16,900); tone(317,0.45,'sawtooth',0.1,940); break;
+    case 'crumble': noiseBurst(0.35,0.18,900); noiseBurst(0.3,0.12,500,0.08); break;
+    case 'dash': noiseBurst(0.16,0.14,1200); break;
+    case 'click': tone(660,0.08,'square',0.08); break;
+    case 'thump': tone(58,0.18,'sine',0.3,40); break;
+    case 'win':
+      [392,523.25,659.25,783.99,1046.5,1318.5].forEach(function(f,i){ tone(f,0.9,'triangle',0.16,null,i*0.13); });
+      tone(65,2.2,'sine',0.2,null,0.2); break;
+    case 'lose':
+      [392,370,349,311,262,196].forEach(function(f,i){ tone(f,0.8,'triangle',0.16,null,i*0.2); });
+      tone(49,2.4,'sine',0.22,null,0.3); break;
+    case 'warn': tone(1108,0.12,'square',0.07); tone(1108,0.12,'square',0.07,null,0.18); break;
+  }
+}
+function startAmbient(){
+  if(!AC||ambientOn) return; ambientOn=true;
+  var g=AC.createGain(); g.gain.value=0.045; g.connect(master);
+  var f=AC.createBiquadFilter(); f.type='lowpass'; f.frequency.value=220; f.connect(g);
+  [55,55*1.007,82.4].forEach(function(fr){ var o=AC.createOscillator(); o.type='triangle'; o.frequency.value=fr; o.connect(f); o.start(); });
+  var lfo=AC.createOscillator(),lg=AC.createGain(); lfo.frequency.value=0.07; lg.gain.value=60; lfo.connect(lg); lg.connect(f.frequency); lfo.start();
+  (function bell(){
+    setTimeout(function(){
+      if(AC&&!muted&&state==='play'){ var scale=[220,261.6,293.7,329.6,392,440]; tone(scale[Math.floor(Math.random()*scale.length)],1.6,'sine',0.035); }
+      bell();
+    },3500+Math.random()*5500);
+  })();
+}
+
+/* ============================== INPUT ============================== */
+var keys={},pressed={};
+addEventListener('keydown',function(e){
+  audioInit(); if(AC&&AC.state==='suspended')AC.resume();
+  var k=e.key.toLowerCase();
+  if(['arrowup','arrowdown','arrowleft','arrowright',' '].indexOf(k)>=0||e.key===' ') e.preventDefault();
+  if(!keys[k]) pressed[k]=true;
+  keys[k]=true; keys[e.key]=true;
+  if(k==='m'){ muted=!muted; if(master) master.gain.value=muted?0:0.5; }
+});
+addEventListener('keyup',function(e){ keys[e.key.toLowerCase()]=false; keys[e.key]=false; });
+function keyDown(){ for(var i=0;i<arguments.length;i++){ if(keys[arguments[i]]) return true; } return false; }
+function keyHit(){ for(var i=0;i<arguments.length;i++){ if(pressed[arguments[i]]) return true; } return false; }
+/* touch: true multi-touch. Every finger is tracked by its identifier with a role
+   fixed where it landed: 'raise' (bottom-right pad), 'dash' (bottom-left pad),
+   or 'move' (anywhere else — the keeper walks toward the touch). Roles are only
+   cleared for the finger that actually lifted, so you can hold RAISE with one
+   thumb and keep steering with the other. */
+var touchMove=null,touchRaise=false,touchDash=false,isTouch=('ontouchstart'in window);
+var touchRoles={};
+function canvasPos(t){ var r=cv.getBoundingClientRect(); return {x:(t.clientX-r.left)*W/r.width, y:(t.clientY-r.top)*H/r.height}; }
+function touchRoleAt(p){ if(p.x>W-170&&p.y>H-120) return 'raise'; if(p.x<170&&p.y>H-120) return 'dash'; return 'move'; }
+function touchSync(){
+  touchRaise=false; touchDash=false; touchMove=null;
+  for(var id in touchRoles){ var t=touchRoles[id];
+    if(t.role==='raise') touchRaise=true;
+    else if(t.role==='dash') touchDash=true;
+    else if(t.role==='move') touchMove=t.pos;
+  }
+}
+cv.addEventListener('pointerdown',function(e){ audioInit(); if(AC&&AC.state==='suspended')AC.resume(); handleTap(canvasPos(e)); });
+cv.addEventListener('touchstart',function(e){
+  audioInit(); if(AC&&AC.state==='suspended')AC.resume();
+  for(var i=0;i<e.changedTouches.length;i++){ var t=e.changedTouches[i],p=canvasPos(t); touchRoles[t.identifier]={role:touchRoleAt(p),pos:p}; }
+  touchSync(); if(e.cancelable) e.preventDefault();
+},{passive:false});
+cv.addEventListener('touchmove',function(e){
+  for(var i=0;i<e.changedTouches.length;i++){ var t=e.changedTouches[i]; if(touchRoles[t.identifier]) touchRoles[t.identifier].pos=canvasPos(t); }
+  touchSync(); if(e.cancelable) e.preventDefault();
+},{passive:false});
+function touchEnd(e){ for(var i=0;i<e.changedTouches.length;i++){ delete touchRoles[e.changedTouches[i].identifier]; } touchSync(); }
+cv.addEventListener('touchend',touchEnd);
+cv.addEventListener('touchcancel',touchEnd);
+
+/* ============================== GAME DATA ============================== */
+var TITHE=12, NIGHT_LEN=270;
+var state='title'; // title, play, win, lose
+var paused=false, shake=0, timeG=0;
+var player,train,ferals,graves,warden,parts,texts,history;
+var banked,score,nightT,channel,spawnGrace,heartBeatT,introT,loseReason,finalTimeLeft;
+var GRAVE_DATA=[
+  {x:120,y:150,n:'LEWIS',e:'He owed the Collector too.'},
+  {x:250,y:110,n:'MABEL',e:'Gone, but not done.'},
+  {x:390,y:160,n:'OLD TOM',e:'He asked for one more night.'},
+  {x:560,y:120,n:'PRUDENCE',e:'She kept every promise but one.'},
+  {x:700,y:155,n:'SILAS',e:'Buried with his debts unpaid.'},
+  {x:835,y:115,n:'AGNES',e:'The garden misses her. Mostly.'},
+  {x:150,y:300,n:'WREN',e:'Small grave, loud ghost.'},
+  {x:300,y:255,n:'BARTHOLOMEW',e:'It took two stones to keep him down.'},
+  {x:640,y:260,n:'ODILE',e:'She danced at her own funeral.'},
+  {x:800,y:295,n:'CASPER',e:'No relation. He insists.'},
+  {x:200,y:430,n:'MOTHER MAUD',e:'She is still watching.'},
+  {x:420,y:330,n:'FENWICK',e:'Died as he lived: arguing.'},
+  {x:580,y:420,n:'LITTLE JUNE',e:'She hid the moon in her pocket.'},
+  {x:760,y:435,n:'THE UNDERTAKER',e:'He buried himself. Twice.'},
+  {x:480,y:250,n:'COUSIN ELI',e:'He arrived early. He always did.'},
+  {x:885,y:370,n:'WIDOW FERN',e:'She outlived three husbands and one priest.'}
+];
+var trees=[{x:60,y:90,s:1.1},{x:900,y:80,s:1.25},{x:880,y:470,s:1.0},{x:55,y:480,s:1.15},{x:480,y:70,s:0.8}];
+var tufts=[]; for(var ti=0;ti<90;ti++) tufts.push({x:20+Math.random()*920,y:90+Math.random()*430,r:Math.random()*6.28});
+var fogs=[]; for(var fi=0;fi<7;fi++) fogs.push({x:Math.random()*W,y:120+Math.random()*380,s:120+Math.random()*160,v:4+Math.random()*7,o:0.05+Math.random()*0.05});
+var stars=[]; for(var si=0;si<110;si++) stars.push({x:Math.random()*W,y:Math.random()*120,r:Math.random()*1.4+0.3,tw:Math.random()*6.28});
+
+function reset(){
+  player={x:W/2,y:H-90,vx:0,vy:0,dir:1,walk:0,hearts:3,invuln:0,dashT:0,dashCD:0,histPush:0};
+  train=[]; ferals=[]; parts=[]; texts=[]; history=[];
+  graves=GRAVE_DATA.map(function(g){ return {x:g.x,y:g.y,n:g.n,e:g.e,used:false,ph:Math.random()*6.28}; });
+  warden={active:false,x:-100,y:-100,timer:8,stealCD:0,ph:0};
+  banked=0; score=0; nightT=NIGHT_LEN; channel={grave:null,t:0};
+  spawnGrace=3; heartBeatT=0; introT=4.2; paused=false; shake=0;
+  loseReason=''; finalTimeLeft=0;
+}
+function addText(x,y,str,col){ texts.push({x:x,y:y,str:str,col:col||'#b9e6c3',t:0,life:1.4}); }
+function burst(x,y,n,col,spd){
+  for(var i=0;i<n;i++){ var a=Math.random()*6.283,v=(0.3+Math.random()*0.7)*(spd||60);
+    parts.push({x:x,y:y,vx:Math.cos(a)*v,vy:Math.sin(a)*v-20,t:0,life:0.5+Math.random()*0.6,col:col,r:1+Math.random()*2.2}); }
+}
+function feralLimit(){ return Math.max(14, 30-banked*1.3); }
+function damage(srcX){
+  if(player.invuln>0) return;
+  player.hearts--; player.invuln=1.6; shake=9; sfx('hurt');
+  burst(player.x,player.y-10,16,'#e8e4da',90);
+  addText(player.x,player.y-44,'STRUCK!','#ff9a8a');
+  player.x+= (player.x<srcX?-1:1)*26;
+  if(player.hearts<=0){ endGame(false,'The Warden\'s cold hands found you. The tithe goes unpaid.'); }
+}
+function endGame(won,reason){
+  if(state!=='play') return;
+  state=won?'win':'lose'; finalTimeLeft=Math.max(0,nightT); loseReason=reason||'';
+  if(won){ score+=Math.floor(finalTimeLeft)*5; sfx('win'); burst(player.x,player.y-20,60,'#9fe8b4',130); }
+  else sfx('lose');
+}
+function handleTap(p){
+  if(state==='title'){ state='play'; reset(); sfx('click'); }
+  else if(state==='win'||state==='lose'){ state='title'; sfx('click'); }
+}
+
+/* ============================== UPDATE ============================== */
+function nearestGrave(){
+  var best=null,bd=46;
+  for(var i=0;i<graves.length;i++){ var g=graves[i]; if(g.used) continue;
+    var d=Math.hypot(g.x-player.x,g.y-(player.y-6)); if(d<bd){bd=d;best=g;} }
+  return best;
+}
+function update(dt){
+  timeG+=dt;
+  var i;
+  for(i=parts.length-1;i>=0;i--){ var p=parts[i]; p.t+=dt; p.x+=p.vx*dt; p.y+=p.vy*dt; p.vy+=60*dt; if(p.t>p.life) parts.splice(i,1); }
+  for(i=texts.length-1;i>=0;i--){ texts[i].t+=dt; texts[i].y-=26*dt; if(texts[i].t>texts[i].life) texts.splice(i,1); }
+  for(i=0;i<fogs.length;i++){ fogs[i].x+=fogs[i].v*dt; if(fogs[i].x-fogs[i].s>W) fogs[i].x=-fogs[i].s; }
+  if(shake>0) shake=Math.max(0,shake-dt*22);
+  if(state!=='play'||paused) return;
+
+  if(introT>0) introT-=dt;
+  nightT-=dt; spawnGrace=Math.max(0,spawnGrace-dt);
+  if(nightT<=0){ nightT=0; endGame(false,'Dawn broke over the fence. The Collector does not accept excuses.'); return; }
+  /* remaining-souls fail check */
+  var unused=0; for(i=0;i<graves.length;i++) if(!graves[i].used) unused++;
+  if(banked+train.length+ferals.length+unused<TITHE){ endGame(false,'Too many of the dead are lost. The tithe can never be paid now.'); return; }
+
+  /* ---- movement ---- */
+  var mx=0,my=0;
+  if(keyDown('a','arrowleft')) mx-=1; if(keyDown('d','arrowright')) mx+=1;
+  if(keyDown('w','arrowup')) my-=1; if(keyDown('s','arrowdown')) my+=1;
+  if(touchMove){ var dx=touchMove.x-player.x,dy=touchMove.y-player.y,dl=Math.hypot(dx,dy); if(dl>14){ mx=dx/dl; my=dy/dl; } }
+  var moving=(mx!==0||my!==0), ml=Math.hypot(mx,my)||1; mx/=ml; my/=ml;
+  var wantDash=keyDown('shift')||touchDash;
+  if(wantDash&&player.dashCD<=0&&player.dashT<=0&&moving){ player.dashT=0.18; player.dashCD=1.5; sfx('dash'); burst(player.x,player.y,8,'#7fd6a4',50); }
+  player.dashT=Math.max(0,player.dashT-dt); player.dashCD=Math.max(0,player.dashCD-dt);
+  var spd=(player.dashT>0?5.4:2.65);
+  var raising=(keyDown(' ')||keyDown('e')||touchRaise)&&!!nearestGrave();
+  if(raising&&!moving){
+    var g=nearestGrave(); channel.grave=g;
+    var prev=channel.t; channel.t+=dt/1.15;
+    if(prev<1&&channel.t>=1){
+      g.used=true;
+      train.push({x:g.x,y:g.y+8,age:0,warned:false,bob:Math.random()*6.28});
+      sfx('rattle'); setTimeout(function(){sfx('raise');},130);
+      burst(g.x,g.y-8,22,'#8ff2b0',80); burst(g.x,g.y-8,10,'#d8ffe2',60);
+      addText(g.x,g.y-52,'RISE!','#9fe8b4'); channel.t=0; channel.grave=null;
+    }
+  } else { channel.t=Math.max(0,channel.t-dt*2.2); if(!nearestGrave()) channel.grave=null; }
+  if(!(raising&&!moving)){
+    player.x+=mx*spd*(dt*60)*0.9;
+    player.y+=my*spd*(dt*60)*0.9;
+  }
+  if(moving&&!(raising)){ player.dir=mx!==0?Math.sign(mx):player.dir; player.walk+=dt*(player.dashT>0?14:9); }
+  player.x=Math.max(26,Math.min(W-26,player.x));
+  player.y=Math.max(112,Math.min(H-22,player.y));
+  player.invuln=Math.max(0,player.invuln-dt);
+
+  /* ---- path history for the train ---- */
+  history.unshift({x:player.x,y:player.y});
+  if(history.length>1400) history.pop();
+
+  /* ---- skeletons ---- */
+  for(i=train.length-1;i>=0;i--){ var sk=train[i]; sk.age+=dt;
+    var idx=Math.min(history.length-1,(i+1)*20), tgt=history[idx]||player;
+    sk.x+=(tgt.x-sk.x)*Math.min(1,dt*10); sk.y+=(tgt.y-sk.y)*Math.min(1,dt*10);
+    var lim=feralLimit();
+    if(!sk.warned&&sk.age>lim-5){ sk.warned=true; sfx('warn'); addText(sk.x,sk.y-46,'IT STIRS…','#ffd97a'); }
+    if(sk.age>=lim){
+      train.splice(i,1); ferals.push({x:sk.x,y:sk.y,life:7,bob:sk.bob});
+      sfx('feral'); addText(sk.x,sk.y-46,'IT TURNS ON YOU!','#ff9a8a'); shake=Math.max(shake,5);
+    }
+  }
+  /* ---- ferals ---- */
+  for(i=ferals.length-1;i>=0;i--){ var fe=ferals[i]; fe.life-=dt;
+    var fa=Math.atan2(player.y-fe.y,player.x-fe.x);
+    fe.x+=Math.cos(fa)*2.15*(dt*60)*0.9; fe.y+=Math.sin(fa)*2.15*(dt*60)*0.9;
+    if(Math.hypot(player.x-fe.x,player.y-fe.y)<24){
+      ferals.splice(i,1); burst(fe.x,fe.y-8,14,'#e8e4da',70); sfx('crumble'); damage(fe.x); if(state!=='play')return; continue;
+    }
+    if(fe.life<=0){ ferals.splice(i,1); burst(fe.x,fe.y-8,12,'#9aa48f',60); sfx('crumble'); addText(fe.x,fe.y-40,'It crumbles, unbanked.','#aeb9a4'); }
+  }
+  /* ---- banking at the mausoleum ---- */
+  if(player.x>418&&player.x<542&&player.y<128&&train.length>0){
+    var n=train.length; banked+=n; score+=n*100+(n>=3?(n-1)*25:0);
+    for(i=0;i<n;i++) burst(480,96,6,'#9fe8b4',70);
+    burst(480,96,26,'#d8ffe2',110); sfx('bank');
+    addText(480,64,'+'+n+' SOUL'+(n>1?'S':'')+' — '+banked+'/'+TITHE,'#d8ffe2');
+    train=[]; history=[];
+    if(banked>=TITHE){ endGame(true); return; }
+  }
+  /* ---- warden ---- */
+  if(!warden.active){
+    warden.timer-=dt;
+    if(warden.timer<=0&&spawnGrace<=0){
+      warden.active=true; warden.chaseT=0; warden.ph=Math.random()*6.28;
+      var side=Math.floor(Math.random()*3),sx,sy;
+      if(side===0){ sx=Math.random()<0.5?30+Math.random()*250:W-280+Math.random()*250; sy=118; } else if(side===1){ sx=24; sy=180+Math.random()*300; } else { sx=W-24; sy=180+Math.random()*300; }
+      if(Math.hypot(sx-player.x,sy-player.y)<260){ sx=W-sx; sy=140+((sy*7)%360); }
+      warden.x=sx; warden.y=sy; burst(sx,sy,18,'#8a93b8',60);
+    }
+  } else {
+    warden.chaseT=(warden.chaseT||0)+dt;
+    if(warden.chaseT>14){ warden.active=false; warden.timer=4; burst(warden.x,warden.y,20,'#8a93b8',60); addText(warden.x,warden.y-44,'The Warden dissolves… for now.','#b9c2e8'); }
+    var wSpd=Math.min(1.6,0.55+banked*0.04+(1-nightT/NIGHT_LEN)*0.3);
+    /* target: player, but drifts toward the tail of the train when close */
+    var tx=player.x,ty=player.y;
+    if(train.length>0){ var tail=train[train.length-1]; if(Math.hypot(tail.x-warden.x,tail.y-warden.y)<Math.hypot(tx-warden.x,ty-warden.y)+40){ tx=tail.x; ty=tail.y; } }
+    var wa=Math.atan2(ty-warden.y,tx-warden.x);
+    warden.x+=Math.cos(wa)*wSpd*(dt*60)*0.9+Math.sin(timeG*2+warden.ph)*0.3;
+    warden.y+=Math.sin(wa)*wSpd*(dt*60)*0.9;
+    warden.stealCD=Math.max(0,warden.stealCD-dt);
+    /* steal a trailing skeleton */
+    if(train.length>0&&warden.stealCD<=0){
+      for(i=train.length-1;i>=0;i--){ if(Math.hypot(train[i].x-warden.x,train[i].y-warden.y)<26){
+        var st=train.splice(i,1)[0]; burst(st.x,st.y-8,18,'#8a93b8',80); sfx('steal');
+        addText(st.x,st.y-46,'STOLEN BY THE WARDEN!','#b9c2e8');
+        warden.active=false; warden.timer=6.5; warden.stealCD=2; break; } }
+    }
+    if(warden.active&&Math.hypot(player.x-warden.x,player.y-warden.y)<27&&player.dashT<=0){
+      warden.active=false; warden.timer=6.5; damage(warden.x); if(state!=='play')return;
+    }
+    /* heartbeat proximity */
+    var wd=Math.hypot(player.x-warden.x,player.y-warden.y);
+    if(wd<200){ heartBeatT-=dt; if(heartBeatT<=0){ sfx('thump'); heartBeatT=0.45+ (wd/200)*0.65; } }
+  }
+}
+
+/* ============================== DRAWING ============================== */
+function rr(x,y,w,h,r){ ctx.beginPath(); ctx.moveTo(x+r,y); ctx.arcTo(x+w,y,x+w,y+h,r); ctx.arcTo(x+w,y+h,x,y+h,r); ctx.arcTo(x,y+h,x,y,r); ctx.arcTo(x,y,x+w,y,r); ctx.closePath(); }
+function txt(str,x,y,size,col,align,bold){ ctx.fillStyle=col; ctx.font=(bold?'bold ':'')+size+'px Georgia,serif'; ctx.textAlign=align||'center'; ctx.textBaseline='middle'; ctx.fillText(str,x,y); }
+function drawTree(t){
+  ctx.strokeStyle='#0c0e14'; ctx.lineWidth=9*t.s; ctx.lineCap='round';
+  ctx.beginPath(); ctx.moveTo(t.x,t.y+34*t.s); ctx.quadraticCurveTo(t.x+4*t.s,t.y,t.x-2*t.s,t.y-30*t.s); ctx.stroke();
+  ctx.lineWidth=4*t.s;
+  var br=[[-26,-52,8],[-6,-62,-14],[20,-50,-4],[34,-38,10]];
+  for(var i=0;i<br.length;i++){ ctx.beginPath(); ctx.moveTo(t.x-2*t.s,t.y-28*t.s); ctx.quadraticCurveTo(t.x+br[i][0]*t.s*0.6,t.y+br[i][1]*t.s*0.7,t.x+br[i][0]*t.s,t.y+br[i][1]*t.s+br[i][2]*t.s); ctx.stroke(); }
+}
+function drawGrave(g){
+  var bobG=g.used?0:Math.sin(timeG*2+g.ph)*1.5;
+  if(!g.used){ var gr=ctx.createRadialGradient(g.x,g.y-6,2,g.x,g.y-6,30); gr.addColorStop(0,'rgba(110,255,170,0.20)'); gr.addColorStop(1,'rgba(110,255,170,0)'); ctx.fillStyle=gr; ctx.fillRect(g.x-30,g.y-36,60,60); }
+  ctx.fillStyle='rgba(0,0,0,0.35)'; ctx.beginPath(); ctx.ellipse(g.x,g.y+12,20,5,0,0,6.29); ctx.fill();
+  ctx.fillStyle=g.used?'#3a4152':'#59637a';
+  ctx.beginPath(); ctx.moveTo(g.x-15,g.y+12); ctx.lineTo(g.x-15,g.y-12+bobG*0.2); ctx.arc(g.x,g.y-12+bobG*0.2,15,3.1416,0); ctx.lineTo(g.x+15,g.y+12); ctx.closePath(); ctx.fill();
+  ctx.fillStyle=g.used?'#2e3444':'#454e66'; ctx.fillRect(g.x-18,g.y+10,36,5);
+  if(g.used){ ctx.strokeStyle='#222836'; ctx.lineWidth=1.6; ctx.beginPath(); ctx.moveTo(g.x-8,g.y-18); ctx.lineTo(g.x-1,g.y-6); ctx.lineTo(g.x-6,g.y+4); ctx.moveTo(g.x-1,g.y-6); ctx.lineTo(g.x+7,g.y+2); ctx.stroke(); }
+  txt(g.n,g.x,g.y-8,7.5,g.used?'#79839b':'#aeb8cf','center',true);
+  if(!g.used){ ctx.fillStyle='#8ff2b0'; ctx.globalAlpha=0.6+Math.sin(timeG*3+g.ph)*0.4; ctx.beginPath(); ctx.arc(g.x,g.y+2,2.2,0,6.29); ctx.fill(); ctx.globalAlpha=1; }
+}
+function drawMausoleum(){
+  var glow=train&&train.length>0;
+  ctx.fillStyle='#11141f'; ctx.fillRect(392,58,176,64);
+  ctx.fillStyle='#1b2030'; ctx.fillRect(400,64,160,58);
+  ctx.fillStyle='#252c42'; ctx.beginPath(); ctx.moveTo(384,64); ctx.lineTo(480,26); ctx.lineTo(576,64); ctx.closePath(); ctx.fill();
+  ctx.fillStyle='#313a58'; ctx.beginPath(); ctx.moveTo(392,64); ctx.lineTo(480,34); ctx.lineTo(568,64); ctx.closePath(); ctx.fill();
+  txt('✦',480,50,15,'#8ff2b0');
+  [412,448,512,548].forEach(function(cx){ ctx.fillStyle='#2c3550'; ctx.fillRect(cx-6,72,12,50); ctx.fillStyle='#39466a'; ctx.fillRect(cx-8,68,16,6); });
+  var dg=ctx.createRadialGradient(480,104,4,480,104,44);
+  dg.addColorStop(0,glow?'rgba(140,255,180,0.55)':'rgba(90,200,150,0.18)'); dg.addColorStop(1,'rgba(0,0,0,0)');
+  ctx.fillStyle=dg; ctx.fillRect(430,56,100,66);
+  ctx.fillStyle='#05070c'; rr(464,78,32,44,14); ctx.fill();
+  ctx.strokeStyle=glow?'#8ff2b0':'#3d5a4a'; ctx.lineWidth=2; rr(464,78,32,44,14); ctx.stroke();
+}
+function drawSkeletonFig(x,y,eyeCol,bob,scale){
+  var s=scale||1, by=Math.sin(timeG*7+bob)*1.6;
+  ctx.save(); ctx.translate(x,y+by*0.3); ctx.scale(s,s);
+  ctx.fillStyle='rgba(0,0,0,0.35)'; ctx.beginPath(); ctx.ellipse(0,13,11,3.4,0,0,6.29); ctx.fill();
+  ctx.strokeStyle='#d9dccd'; ctx.lineWidth=2.4; ctx.lineCap='round';
+  ctx.beginPath(); ctx.moveTo(0,-2); ctx.lineTo(0,7); ctx.stroke();
+  ctx.lineWidth=1.8;
+  [-3,0,3].forEach(function(o){ ctx.beginPath(); ctx.moveTo(-5,-1+o); ctx.quadraticCurveTo(0,1+o,5,-1+o); ctx.stroke(); });
+  var sw=Math.sin(timeG*7+bob)*3;
+  ctx.beginPath(); ctx.moveTo(0,0); ctx.lineTo(-7,5+sw); ctx.moveTo(0,0); ctx.lineTo(7,5-sw); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(0,7); ctx.lineTo(-4,13+sw*0.5); ctx.moveTo(0,7); ctx.lineTo(4,13-sw*0.5); ctx.stroke();
+  ctx.fillStyle='#e6ead9'; ctx.beginPath(); ctx.arc(0,-9,7,0,6.29); ctx.fill();
+  ctx.fillRect(-3.4,-3,6.8,3);
+  ctx.fillStyle='#0a0c10'; ctx.beginPath(); ctx.arc(-2.6,-9.4,1.7,0,6.29); ctx.arc(2.6,-9.4,1.7,0,6.29); ctx.fill();
+  ctx.fillStyle=eyeCol; ctx.beginPath(); ctx.arc(-2.6,-9.4,1.05,0,6.29); ctx.arc(2.6,-9.4,1.05,0,6.29); ctx.fill();
+  ctx.restore();
+}
+function drawPlayer(){
+  var blink=player.invuln>0&&Math.floor(timeG*14)%2===0;
+  if(blink) return;
+  var bobP=movingCache?Math.sin(player.walk)*1.8:Math.sin(timeG*2.2)*0.7;
+  var x=player.x,y=player.y+bobP*0.4;
+  /* lantern glow */
+  var lg=ctx.createRadialGradient(x,y-8,6,x,y-8,120);
+  lg.addColorStop(0,'rgba(150,255,190,0.13)'); lg.addColorStop(1,'rgba(150,255,190,0)');
+  ctx.fillStyle=lg; ctx.fillRect(x-120,y-128,240,240);
+  ctx.fillStyle='rgba(0,0,0,0.4)'; ctx.beginPath(); ctx.ellipse(x,y+14,14,4.4,0,0,6.29); ctx.fill();
+  /* robe */
+  ctx.fillStyle='#1d1430';
+  ctx.beginPath(); ctx.moveTo(x,y+14); ctx.quadraticCurveTo(x-13,y-2,x-7,y-14); ctx.quadraticCurveTo(x,y-20,x+7,y-14); ctx.quadraticCurveTo(x+13,y-2,x,y+14); ctx.closePath(); ctx.fill();
+  ctx.fillStyle='#2a1e44'; ctx.beginPath(); ctx.moveTo(x-7,y-14); ctx.quadraticCurveTo(x,y-22,x+7,y-14); ctx.quadraticCurveTo(x,y-8,x-7,y-14); ctx.closePath(); ctx.fill();
+  /* face + eyes */
+  ctx.fillStyle='#0b0a12'; ctx.beginPath(); ctx.ellipse(x,y-13,5.6,6,0,0,6.29); ctx.fill();
+  ctx.fillStyle='#9fe8b4'; ctx.beginPath(); ctx.arc(x-2+player.dir*1.2,y-13,1.15,0,6.29); ctx.arc(x+2.4+player.dir*1.2,y-13,1.15,0,6.29); ctx.fill();
+  /* staff with skull */
+  var sx=x+player.dir*12, sy=y-2+Math.sin(player.walk*0.9)*1.4;
+  ctx.strokeStyle='#4a3a26'; ctx.lineWidth=2.4; ctx.beginPath(); ctx.moveTo(sx,y+13); ctx.lineTo(sx,sy-12); ctx.stroke();
+  ctx.fillStyle='#e6ead9'; ctx.beginPath(); ctx.arc(sx,sy-15,4.4,0,6.29); ctx.fill();
+  ctx.fillStyle='#69f2a0'; ctx.beginPath(); ctx.arc(sx-1.5,sy-15.4,1,0,6.29); ctx.arc(sx+1.5,sy-15.4,1,0,6.29); ctx.fill();
+  var sg=ctx.createRadialGradient(sx,sy-15,1,sx,sy-15,26); sg.addColorStop(0,'rgba(120,255,180,0.35)'); sg.addColorStop(1,'rgba(120,255,180,0)'); ctx.fillStyle=sg; ctx.fillRect(sx-26,sy-41,52,52);
+  if(player.dashT>0){ ctx.strokeStyle='rgba(140,255,190,0.5)'; ctx.lineWidth=2; ctx.beginPath(); ctx.moveTo(x-player.dir*10,y-14); ctx.lineTo(x-player.dir*26,y-14); ctx.moveTo(x-player.dir*8,y); ctx.lineTo(x-player.dir*22,y); ctx.stroke(); }
+}
+function drawWarden(){
+  if(!warden.active) return;
+  var x=warden.x,y=warden.y+Math.sin(timeG*1.7+warden.ph)*3;
+  var mg=ctx.createRadialGradient(x,y,4,x,y,64); mg.addColorStop(0,'rgba(110,120,190,0.20)'); mg.addColorStop(1,'rgba(0,0,0,0)');
+  ctx.fillStyle=mg; ctx.fillRect(x-64,y-64,128,128);
+  ctx.fillStyle='rgba(6,7,14,0.92)';
+  ctx.beginPath(); ctx.moveTo(x,y+30);
+  for(var i=0;i<=6;i++){ ctx.lineTo(x-15+i*5, y+30+Math.sin(timeG*5+i*1.7)*3); }
+  ctx.lineTo(x+15,y-16); ctx.quadraticCurveTo(x,y-30,x-15,y-16); ctx.closePath(); ctx.fill();
+  ctx.fillStyle='#cfd2dc'; ctx.beginPath(); ctx.ellipse(x,y-20,7.6,10,0,0,6.29); ctx.fill();
+  ctx.fillStyle='#0a0a10'; ctx.beginPath(); ctx.ellipse(x,y-14,3.6,2.6,0,0,6.29); ctx.fill();
+  ctx.fillStyle='#ff5f4d'; ctx.beginPath(); ctx.arc(x-3,y-22,1.5,0,6.29); ctx.arc(x+3,y-22,1.5,0,6.29); ctx.fill();
+  ctx.strokeStyle='rgba(207,210,220,0.85)'; ctx.lineWidth=2.4; ctx.lineCap='round';
+  ctx.beginPath(); ctx.moveTo(x+14,y-2); ctx.quadraticCurveTo(x+24,y+4,x+22,y+16); ctx.stroke();
+}
+var movingCache=false;
+function drawWorld(){
+  /* sky + ground */
+  var sky=ctx.createLinearGradient(0,0,0,140); sky.addColorStop(0,'#070a18'); sky.addColorStop(1,'#0d1226');
+  ctx.fillStyle=sky; ctx.fillRect(0,0,W,140);
+  var i; for(i=0;i<stars.length;i++){ ctx.globalAlpha=0.4+0.6*Math.abs(Math.sin(timeG*0.8+stars[i].tw)); ctx.fillStyle='#cdd6ff'; ctx.fillRect(stars[i].x,stars[i].y,stars[i].r,stars[i].r); }
+  ctx.globalAlpha=1;
+  /* moon on its arc */
+  var frac=state==='play'?1-nightT/NIGHT_LEN:0.12, mang=Math.PI*(0.08+0.84*frac);
+  var moonX=W/2+Math.cos(mang)*400, moonY=118-Math.sin(mang)*88;
+  var mg2=ctx.createRadialGradient(moonX,moonY,4,moonX,moonY,52); mg2.addColorStop(0,'rgba(220,228,255,0.30)'); mg2.addColorStop(1,'rgba(220,228,255,0)');
+  ctx.fillStyle=mg2; ctx.fillRect(moonX-52,moonY-52,104,104);
+  ctx.fillStyle='#e8ecfa'; ctx.beginPath(); ctx.arc(moonX,moonY,17,0,6.29); ctx.fill();
+  ctx.fillStyle='#c9d1e8'; ctx.beginPath(); ctx.arc(moonX-6,moonY-4,4,0,6.29); ctx.arc(moonX+7,moonY+7,3,0,6.29); ctx.fill();
+  var gr2=ctx.createLinearGradient(0,108,0,H); gr2.addColorStop(0,'#0d1a12'); gr2.addColorStop(0.4,'#0a140d'); gr2.addColorStop(1,'#060a07');
+  ctx.fillStyle=gr2; ctx.fillRect(0,108,W,H-108);
+  /* path */
+  ctx.fillStyle='rgba(70,74,66,0.20)'; ctx.beginPath(); ctx.moveTo(462,122); ctx.lineTo(498,122); ctx.lineTo(516,H); ctx.lineTo(444,H); ctx.closePath(); ctx.fill();
+  /* fence */
+  ctx.fillStyle='#141a26'; ctx.fillRect(0,104,W,4);
+  for(i=8;i<W;i+=26){ if(i>380&&i<580) continue; ctx.fillRect(i,92,4,20); ctx.beginPath(); ctx.moveTo(i,92); ctx.lineTo(i+2,84); ctx.lineTo(i+4,92); ctx.fill(); }
+  ctx.fillStyle='rgba(120,140,120,0.25)';
+  for(i=0;i<tufts.length;i++){ var t2=tufts[i]; ctx.fillRect(t2.x,t2.y,1.6,5); ctx.fillRect(t2.x+3,t2.y+1,1.4,4); }
+  trees.forEach(drawTree);
+  drawMausoleum();
+  graves.forEach(drawGrave);
+  txt('THE COLLECTOR’S CRYPT',480,134,10,'#93a3c0','center',true);
+}
+function drawHUD(){
+  /* souls */
+  ctx.fillStyle='rgba(5,8,6,0.55)'; rr(12,10,196,34,8); ctx.fill();
+  ctx.fillStyle='#e6ead9'; ctx.beginPath(); ctx.arc(32,27,8,0,6.29); ctx.fill();
+  ctx.fillStyle='#0a0c10'; ctx.beginPath(); ctx.arc(29,25.6,2,0,6.29); ctx.arc(35,25.6,2,0,6.29); ctx.fill();
+  txt('SOULS  '+banked+' / '+TITHE,120,27,16,'#b9e6c3','center',true);
+  /* hearts */
+  ctx.fillStyle='rgba(5,8,6,0.55)'; rr(W-128,10,116,34,8); ctx.fill();
+  for(var i=0;i<3;i++){ var hx=W-104+i*34,hy=27,on=i<player.hearts;
+    ctx.fillStyle=on?'#c93b4e':'#333a3f';
+    ctx.beginPath(); ctx.moveTo(hx,hy+8); ctx.bezierCurveTo(hx-11,hy-2,hx-6,hy-11,hx,hy-4); ctx.bezierCurveTo(hx+6,hy-11,hx+11,hy-2,hx,hy+8); ctx.fill(); }
+  /* night bar */
+  ctx.fillStyle='rgba(5,8,6,0.55)'; rr(W/2-130,10,260,16,8); ctx.fill();
+  ctx.fillStyle='#232c4a'; rr(W/2-126,13,252,10,5); ctx.fill();
+  ctx.fillStyle='#8fa3d9'; rr(W/2-126,13,252*(1-nightT/NIGHT_LEN),10,5); ctx.fill();
+  txt('🌙',W/2-126+252*(1-nightT/NIGHT_LEN),18,12,'#fff');
+  txt('DAWN',W/2+142,18,11,'#8fa3d9','left',true);
+  /* score + train */
+  txt('SCORE '+score,16,58,13,'#8b98ad','left',true);
+  if(train.length>0) txt('⛓ TRAIN ×'+train.length+' — deliver them to the crypt!',W/2,58,13,'#ffd97a','center',true);
+}
+function veil(a){ ctx.fillStyle='rgba(3,4,8,'+a+')'; ctx.fillRect(0,0,W,H); }
+function drawTitle(){
+  drawWorld();
+  /* idle skeletons + warden silhouette for mood */
+  drawSkeletonFig(300,430,'#69f2a0',1.2,1.15); drawSkeletonFig(660,432,'#69f2a0',3.9,1.15); drawSkeletonFig(480,452,'#69f2a0',5.4,1.3);
+  veil(0.45);
+  txt('⚰  G R A V E   T I T H E  ⚰',W/2,138,46,'#e8f5e2','center',true);
+  txt('— a necromancy tale —',W/2,176,17,'#8ff2b0');
+  txt('The Collector is owed twelve souls by dawn, and the dead of this graveyard',W/2,232,16.5,'#cfd8c9');
+  txt('are the only currency he accepts. Raise them. Lead them. Bank them.',W/2,256,16.5,'#cfd8c9');
+  txt('But the raised do not stay obedient for long — and something tall',W/2,280,16.5,'#cfd8c9');
+  txt('and patient walks the rows, collecting for itself.',W/2,304,16.5,'#cfd8c9');
+  ctx.fillStyle='rgba(10,14,10,0.7)'; rr(W/2-300,330,600,86,10); ctx.fill();
+  txt('WASD / Arrows — move      Hold SPACE at a gravestone — raise the dead',W/2,352,14.5,'#b9e6c3');
+  txt('Lead your train into the Crypt door to bank souls      SHIFT — dash',W/2,376,14.5,'#b9e6c3');
+  txt('Bank 12 souls before dawn. Don’t let the Warden touch you — or your train.',W/2,400,14.5,'#ffd97a');
+  if(Math.floor(timeG*1.6)%2===0) txt('CLICK  or  press  ENTER  to begin the night',W/2,462,19,'#e8f5e2','center',true);
+  txt('A Spooky 2D Jam ’26 entry — theme: NECROMANCY',W/2,508,12.5,'#77879a');
+}
+function drawEnd(won){
+  drawWorld(); veil(0.62);
+  if(won){
+    txt('THE TITHE IS PAID',W/2,180,44,'#9fe8b4','center',true);
+    txt('Twelve souls delivered. The crypt door closes with a sound like a sigh,',W/2,238,16.5,'#cfd8c9');
+    txt('your train rests at last, and the tall thing in the rows bows — and goes.',W/2,262,16.5,'#cfd8c9');
+    txt('Dawn finds you alive, which is more than the dead can say.',W/2,286,16.5,'#cfd8c9');
+  } else {
+    txt('THE TITHE GOES UNPAID',W/2,180,40,'#ff9a8a','center',true);
+    txt(loseReason,W/2,238,16.5,'#cfd8c9');
+    txt('Souls banked: '+banked+' of '+TITHE,W/2,266,16.5,'#ffd97a');
+  }
+  txt('FINAL SCORE  '+score,W/2,330,24,'#e8f5e2','center',true);
+  if(won) txt('Time to spare: '+Math.ceil(finalTimeLeft)+'s before dawn',W/2,362,15,'#8fa3d9');
+  if(Math.floor(timeG*1.6)%2===0) txt('CLICK  or  press  ENTER  for another night',W/2,430,17,'#e8f5e2','center',true);
+}
+function draw(){
+  ctx.save();
+  if(shake>0) ctx.translate((Math.random()-0.5)*shake,(Math.random()-0.5)*shake);
+  if(state==='title'){ drawTitle(); ctx.restore(); return; }
+  if(state==='win'||state==='lose'){ drawEnd(state==='win'); ctx.restore(); return; }
+  drawWorld();
+  /* channel ring */
+  var ng=nearestGrave();
+  if(ng){
+    ctx.strokeStyle='rgba(143,242,176,0.65)'; ctx.lineWidth=2;
+    ctx.beginPath(); ctx.arc(ng.x,ng.y-4,24+Math.sin(timeG*4)*2,0,6.29); ctx.stroke();
+    if(channel.t>0){ ctx.strokeStyle='#d8ffe2'; ctx.lineWidth=4; ctx.beginPath(); ctx.arc(ng.x,ng.y-4,28,-1.57,-1.57+channel.t*6.29); ctx.stroke(); }
+  }
+  /* entities: train, ferals, warden, player */
+  var lim=feralLimit(),i,sk;
+  for(i=0;i<train.length;i++){ sk=train[i]; var r=Math.min(1,sk.age/lim);
+    var col=r<0.62?'#69f2a0':(r<0.85?'#ffd94d':'#ff5f4d');
+    if(r>=0.85&&Math.floor(timeG*10)%2===0) col='#ffd94d';
+    drawSkeletonFig(sk.x,sk.y,col,sk.bob,1); }
+  for(i=0;i<ferals.length;i++) drawSkeletonFig(ferals[i].x,ferals[i].y,'#ff5f4d',ferals[i].bob,1.12);
+  drawWarden();
+  drawPlayer();
+  /* particles + texts */
+  for(i=0;i<parts.length;i++){ var p=parts[i]; ctx.globalAlpha=1-p.t/p.life; ctx.fillStyle=p.col; ctx.beginPath(); ctx.arc(p.x,p.y,p.r,0,6.29); ctx.fill(); }
+  ctx.globalAlpha=1;
+  ctx.font='bold 14px Georgia,serif'; ctx.textAlign='center';
+  for(i=0;i<texts.length;i++){ var t=texts[i]; ctx.globalAlpha=Math.min(1,1.6-t.t/t.life); ctx.fillStyle=t.col; ctx.fillText(t.str,t.x,t.y); }
+  ctx.globalAlpha=1;
+  /* fog */
+  for(i=0;i<fogs.length;i++){ var f=fogs[i]; var fg=ctx.createRadialGradient(f.x,f.y,10,f.x,f.y,f.s); fg.addColorStop(0,'rgba(180,200,190,'+f.o+')'); fg.addColorStop(1,'rgba(180,200,190,0)'); ctx.fillStyle=fg; ctx.fillRect(f.x-f.s,f.y-f.s*0.4,f.s*2,f.s*0.8); }
+  /* warden proximity chill */
+  if(warden.active){ var wd=Math.hypot(player.x-warden.x,player.y-warden.y); if(wd<170){ ctx.strokeStyle='rgba(160,175,255,'+(0.35*(1-wd/170))+')'; ctx.lineWidth=10; ctx.strokeRect(0,0,W,H); } }
+  /* vignette */
+  var vg=ctx.createRadialGradient(W/2,H/2,H*0.42,W/2,H/2,H*0.85); vg.addColorStop(0,'rgba(0,0,0,0)'); vg.addColorStop(1,'rgba(0,0,0,0.42)');
+  ctx.fillStyle=vg; ctx.fillRect(0,0,W,H);
+  drawHUD();
+  /* near-grave epitaph */
+  if(ng&&channel.t<=0){
+    ctx.fillStyle='rgba(5,8,6,0.72)'; rr(W/2-260,H-56,520,40,9); ctx.fill();
+    txt('Here lies '+ng.n+' — “'+ng.e+'”   ·   HOLD SPACE TO RAISE',W/2,H-36,13.5,'#b9e6c3');
+  }
+  if(introT>0){
+    ctx.fillStyle='rgba(5,8,6,0.72)'; rr(W/2-330,74,660,42,9); ctx.fill();
+    txt('Pay the tithe: raise the dead, lead them to the Crypt, bank 12 souls before dawn.',W/2,95,14.5,'#e8f5e2');
+  }
+  if(isTouch&&state==='play'){
+    ctx.globalAlpha=touchRaise?0.9:0.5; ctx.fillStyle=touchRaise?'#4a7d55':'#2a3b2e'; ctx.beginPath(); ctx.arc(W-70,H-62,touchRaise?46:42,0,6.29); ctx.fill();
+    ctx.globalAlpha=touchDash?0.9:0.5; ctx.fillStyle=touchDash?'#4a7d55':'#2a3b2e'; ctx.beginPath(); ctx.arc(70,H-62,touchDash?38:34,0,6.29); ctx.fill(); ctx.globalAlpha=1;
+    txt('RAISE',W-70,H-62,14,'#d8ffe2','center',true); txt('DASH',70,H-62,12,'#d8ffe2','center',true);
+    if(touchMove){ ctx.strokeStyle='rgba(216,255,226,0.65)'; ctx.lineWidth=2; ctx.beginPath(); ctx.arc(touchMove.x,touchMove.y,10,0,6.29); ctx.stroke(); }
+    txt('Hold RAISE at a grave — steer with your other thumb',W/2,H-14,12.5,'rgba(216,255,226,0.55)');
+  }
+  if(paused){ veil(0.6); txt('PAUSED',W/2,H/2-14,38,'#e8f5e2','center',true); txt('Press P to resume',W/2,H/2+26,15,'#b9e6c3'); }
+  ctx.restore();
+}
+
+/* ============================== LOOP ============================== */
+reset();
+var lastTs=0;
+function frame(ts){
+  requestAnimationFrame(frame);
+  var dt=Math.min(0.05,(ts-lastTs)/1000||0.016); lastTs=ts;
+  if(state==='play'){
+    if(keyHit('p')) paused=!paused;
+    movingCache=(keyDown('a','arrowleft','d','arrowright','w','arrowup','s','arrowdown')||!!touchMove)&&!paused;
+  }
+  if(state==='title'&&keyHit('enter')){ audioInit(); state='play'; reset(); sfx('click'); }
+  else if((state==='win'||state==='lose')&&keyHit('enter','r')){ state='title'; sfx('click'); }
+  update(dt); draw();
+  for(var k in pressed) delete pressed[k];
+}
+requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>
