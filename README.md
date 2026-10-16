@@ -26,7 +26,7 @@ Built for [Spooky 2D Jam '26](https://itch.io/jam/spooky2djam26) — theme: **NE
 
 ## The night
 
-- 180 seconds until dawn. Bank **12 souls** to win.
+- 150 seconds until dawn. Bank **12 souls** to win. Every skeleton turns feral fast — raise a few, race them to the Crypt, repeat: it's a speedrun.
 - The Warden hunts you and your train — dash through it or give it a wide berth.
 - Raised skeletons turn feral after a while and hunt *you* — bank them before they turn, or dodge your own dead.
 - 3 hearts. Lose them all, or let dawn break with the tithe unpaid, and the Collector takes *you* instead.
