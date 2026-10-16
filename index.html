@@ -142,7 +142,7 @@ cv.addEventListener('touchend',touchEnd);
 cv.addEventListener('touchcancel',touchEnd);
 
 /* ============================== GAME DATA ============================== */
-var TITHE=12, NIGHT_LEN=150;
+var TITHE=12, NIGHT_LEN=90;
 var state='title'; // title, play, win, lose
 var paused=false, shake=0, timeG=0;
 var player,train,ferals,graves,warden,parts,texts,history;
@@ -184,7 +184,7 @@ function burst(x,y,n,col,spd){
   for(var i=0;i<n;i++){ var a=Math.random()*6.283,v=(0.3+Math.random()*0.7)*(spd||60);
     parts.push({x:x,y:y,vx:Math.cos(a)*v,vy:Math.sin(a)*v-20,t:0,life:0.5+Math.random()*0.6,col:col,r:1+Math.random()*2.2}); }
 }
-function feralLimit(){ return Math.max(10, 20-banked*1.0); }
+function feralLimit(){ return Math.max(7, 17-banked*1.0); }
 function damage(srcX){
   if(player.invuln>0) return;
   player.hearts--; player.invuln=1.6; shake=9; sfx('hurt');
