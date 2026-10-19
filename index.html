@@ -117,6 +117,9 @@ function keyHit(){ for(var i=0;i<arguments.length;i++){ if(pressed[arguments[i]]
    thumb and keep steering with the other. */
 var touchMove=null,touchRaise=false,touchDash=false,isTouch=('ontouchstart'in window);
 var touchRoles={};
+var playStartedAt=0;
+var startTapPos=null;
+var touchIgnored={};
 function canvasPos(t){ var r=cv.getBoundingClientRect(); return {x:(t.clientX-r.left)*W/r.width, y:(t.clientY-r.top)*H/r.height}; }
 function touchRoleAt(p){ if(p.x>W-170&&p.y>H-120) return 'raise'; if(p.x<170&&p.y>H-120) return 'dash'; return 'move'; }
 function touchSync(){
@@ -130,16 +133,30 @@ function touchSync(){
 cv.addEventListener('pointerdown',function(e){ audioInit(); if(AC&&AC.state==='suspended')AC.resume(); handleTap(canvasPos(e)); });
 cv.addEventListener('touchstart',function(e){
   audioInit(); if(AC&&AC.state==='suspended')AC.resume();
-  for(var i=0;i<e.changedTouches.length;i++){ var t=e.changedTouches[i],p=canvasPos(t); touchRoles[t.identifier]={role:touchRoleAt(p),pos:p}; }
+  for(var i=0;i<e.changedTouches.length;i++){ var t=e.changedTouches[i],p=canvasPos(t);
+    /* The tap that starts the game (handleTap, via pointerdown) must not leak
+       into play as a steering touch: ignore a touch that begins at (near) the
+       starting tap's own position within 1s of the run starting. A steering
+       touch anywhere else — even immediately — is legitimate and passes.
+       Its later touchmove is ignored too because it is never registered. */
+    if(state==='play'&&startTapPos&&Date.now()-playStartedAt<1000&&Math.hypot(p.x-startTapPos.x,p.y-startTapPos.y)<40){ touchIgnored[t.identifier]=true; continue; }
+    touchRoles[t.identifier]={role:touchRoleAt(p),pos:p}; }
   touchSync(); if(e.cancelable) e.preventDefault();
 },{passive:false});
 cv.addEventListener('touchmove',function(e){
   for(var i=0;i<e.changedTouches.length;i++){ var t=e.changedTouches[i]; if(touchRoles[t.identifier]) touchRoles[t.identifier].pos=canvasPos(t); }
   touchSync(); if(e.cancelable) e.preventDefault();
 },{passive:false});
-function touchEnd(e){ for(var i=0;i<e.changedTouches.length;i++){ delete touchRoles[e.changedTouches[i].identifier]; } touchSync(); }
+function touchEnd(e){ for(var i=0;i<e.changedTouches.length;i++){ delete touchRoles[e.changedTouches[i].identifier]; delete touchIgnored[e.changedTouches[i].identifier]; } touchSync(); }
 cv.addEventListener('touchend',touchEnd);
 cv.addEventListener('touchcancel',touchEnd);
+/* If the window loses focus while a key or touch is held, the matching
+   keyup/touchend is never delivered — without this reset the held input
+   stays latched forever and the keeper walks on his own (the bug
+   Katsuna96 reported on the jam page, Oct 19). Clear ALL input on blur. */
+function clearAllInput(){ keys={}; pressed={}; touchRoles={}; touchIgnored={}; touchSync(); }
+addEventListener('blur',clearAllInput);
+if(document.addEventListener) document.addEventListener('visibilitychange',function(){ if(document.hidden) clearAllInput(); });
 
 /* ============================== GAME DATA ============================== */
 var TITHE=12, NIGHT_LEN=90;
@@ -172,6 +189,10 @@ var fogs=[]; for(var fi=0;fi<7;fi++) fogs.push({x:Math.random()*W,y:120+Math.ran
 var stars=[]; for(var si=0;si<110;si++) stars.push({x:Math.random()*W,y:Math.random()*120,r:Math.random()*1.4+0.3,tw:Math.random()*6.28});
 
 function reset(){
+  /* A fresh run starts with no latched input: clears any key/touch held
+     from the title screen (including the starting tap itself). */
+  keys={}; pressed={}; touchRoles={}; touchIgnored={}; touchSync();
+  playStartedAt=Date.now(); startTapPos=null;
   player={x:W/2,y:H-90,vx:0,vy:0,dir:1,walk:0,hearts:3,invuln:0,dashT:0,dashCD:0,histPush:0};
   train=[]; ferals=[]; parts=[]; texts=[]; history=[];
   graves=GRAVE_DATA.map(function(g){ return {x:g.x,y:g.y,n:g.n,e:g.e,used:false,ph:Math.random()*6.28}; });
@@ -202,7 +223,7 @@ function endGame(won,reason){
 }
 function handleTap(p){
   if(state==='title'&&p.y>410&&p.y<450){ hard=p.x>=W/2; sfx('click'); return; } // tap a difficulty label
-  if(state==='title'){ state='play'; reset(); sfx('click'); }
+  if(state==='title'){ state='play'; reset(); startTapPos=p; sfx('click'); }
   else if(state==='win'||state==='lose'){ state='title'; sfx('click'); }
 }
 
